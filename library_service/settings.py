@@ -32,7 +32,9 @@ if not SECRET_KEY:
     SECRET_KEY = "".join(
         random.choice(string.ascii_lowercase) for i in range(32)
     )
-SECRET_KEY = "django-insecure-w4$bql9*vj(&^fm+lx(nsbd1yu8f2u&q-x083*g1(en!x!73yp"
+SECRET_KEY = (
+    "django-insecure-w4$bql9*vj(&^fm+lx(nsbd1yu8f2u&q-x083*g1(en!x!73yp"
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -52,8 +54,9 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "debug_toolbar",
+    "django_q",
     "library",
-    "user"
+    "user",
 ]
 
 MIDDLEWARE = [
@@ -171,9 +174,32 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": False,
-    "AUTH_HEADER_NAME": "HTTP_AUTHORIZE"
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZE",
 }
 
 INTERNAL_IPS = [
     "127.0.0.1",
 ]
+
+Q_CLUSTER = {
+    "name": "library_project",
+    "workers": 2,
+    "recycle": 500,
+    "timeout": 60,
+    "compress": True,
+    "save_limit": 250,
+    "queue_limit": 500,
+    "cpu_affinity": 1,
+    "label": "Django Q",
+    "redis": {
+        "host": "127.0.0.1",
+        "port": 6379,
+        "db": 0,
+    },
+    "error_reporter": {
+        "rollbar": {
+            "access_token": "32we33a92a5224jiww8982",
+            "environment": "Django-Q",
+        }
+    },
+}
