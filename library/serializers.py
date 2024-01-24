@@ -9,7 +9,32 @@ class BookSerializer(serializers.ModelSerializer):
         fields = ("title", "author", "cover", "inventory", "daily_fee")
 
 
+class BorrowingCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Borrowing
+        fields = (
+            "borrow_date",
+            "expected_return_date",
+            "actual_return_date",
+            "book",
+        )
+
+
 class BorrowingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Borrowing
+        fields = (
+            "borrow_date",
+            "expected_return_date",
+            "actual_return_date",
+            "book",
+            "user",
+        )
+
+
+class BorrowingDetailSerializer(serializers.ModelSerializer):
+    book = BookSerializer()
+
     class Meta:
         model = Borrowing
         fields = (
