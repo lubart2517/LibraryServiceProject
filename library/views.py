@@ -166,7 +166,33 @@ class PaymentViewSet(
 ):
     queryset = Payment.objects
     serializer_class = PaymentSerializer
-    permission_classes = (IsAdminOrReadOnly,)
+    permission_classes = (IsAllowedToCreateOrAdmin,)
 
+    def get_queryset(self):
+        """Retrieve the payments with filters"""
+        user_id = self.request.query_params.get("user_id")
+        queryset = self.queryset
+
+        if user_id:
+            queryset = queryset.filter(borrowing__user__id=user_id)
+
+        return queryset.distinct()
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "user_id",
+                type={"type": "number"},
+                description="Filter by borrowing__user id (ex. ?user_id=2)",
+            ),
+        ]
+    )
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        if request.user.is_staff:
+            return super().list(request, *args, **kwargs)
+        else:
+            self.queryset = Payment.objects.filter(borrowing__user=request.user)
+            return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

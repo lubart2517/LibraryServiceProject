@@ -20,4 +20,11 @@ class IsAllowedToCreateOrAdmin(BasePermission):
         if request.method == "POST":
             return bool(request.user)
         else:
-            return bool(obj.user == request.user or request.user.is_staff)
+            try:
+                user = obj.user
+            except AttributeError:
+                user = obj.borrowing.user
+            return bool(
+                request.user
+                and (user == request.user or request.user.is_staff)
+            )
