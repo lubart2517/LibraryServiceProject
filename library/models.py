@@ -26,19 +26,6 @@ class Borrowing(models.Model):
     book = models.ForeignKey(Book, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
-    def save(
-            self,
-            force_insert: bool = False,
-            force_update: bool = False,
-            using: None = None,
-            update_fields: None = None
-    ) -> None:
-        self.book.inventory -= 1
-        self.book.save()
-        return super(Borrowing, self).save(
-            force_insert, force_update, using, update_fields
-        )
-
 
 class Payment(models.Model):
 

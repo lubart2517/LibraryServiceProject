@@ -1,12 +1,15 @@
+import os
 import datetime
-
-from django.db.models import Q
+import requests
+from django.db import transaction
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from rest_framework.response import Response
+from rest_framework.views import Response
+from dotenv import load_dotenv
+from datetime import timedelta
 
 from library.models import Book, Borrowing, Payment
 from library.serializers import (
@@ -21,6 +24,7 @@ from library.permissions import (
     IsAllowedToCreateOrAdmin,
 )
 
+load_dotenv()
 
 class BookViewSet(
     mixins.ListModelMixin,
@@ -54,7 +58,7 @@ class BorrowingViewSet(
         if self.action == "retrieve":
             return BorrowingDetailSerializer
 
-        if self.action == "perform_create":
+        if self.action == "create":
             return BorrowingCreateSerializer
 
         return BorrowingSerializer
@@ -65,8 +69,8 @@ class BorrowingViewSet(
                 "is_active",
                 type=OpenApiTypes.STR,
                 description=(
-                        "Filter by state of borrowing(returned or not)"
-                        "(ex. ?is_active=True)"
+                    "Filter by state of borrowing(returned or not)"
+                    "(ex. ?is_active=True)"
                 ),
             ),
             OpenApiParameter(
@@ -84,7 +88,7 @@ class BorrowingViewSet(
             return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        book = Book.objects.get(id=serializer.book)
+        book = Book.objects.get(id=serializer.validated_data["book"].id)
         if book.inventory == 0:
             return Response(
                 {
@@ -93,7 +97,18 @@ class BorrowingViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
-            serializer.save(user=self.request.user)
+            with transaction.atomic():
+                book.inventory -= 1
+                book.save()
+                serializer.save(user=self.request.user)
+
+                url = (f"https://api.telegram.org/"
+                       f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
+                       f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
+                       f"&text=new borrowing of {book.title} book. Only"
+                       f"{book.inventory} of copies left"
+                       )
+                requests.get(url)
 
     def get_queryset(self):
         """Retrieve the borrowing with filters"""
@@ -103,14 +118,41 @@ class BorrowingViewSet(
 
         if is_active:
             if is_active == "True":
-                queryset = queryset.filter(actual_return_date__isnull=True)
+                queryset = queryset.filter(
+                    actual_return_date__isnull=True
+                )
             elif is_active == "False":
-                queryset = queryset.filter(actual_return_date__isnull=False)
+                queryset = queryset.filter(
+                    actual_return_date__isnull=False
+                )
 
         if user_id:
             queryset = queryset.filter(user__id=user_id)
 
         return queryset.distinct()
+
+    @action(
+        methods=["GET"],
+        detail=True,
+        url_path="return",
+        permission_classes=[IsAllowedToCreateOrAdmin],
+    )
+    def return_me(self, request, pk=None):
+        """Endpoint to view route flights"""
+        borrowing = self.get_object()
+        if borrowing.actual_return_date:
+            return Response(
+                status=status.HTTP_304_NOT_MODIFIED,
+            )
+        else:
+            with transaction.atomic():
+                borrowing.actual_return_date = datetime.datetime.now().date()
+                borrowing.save()
+                book = borrowing.book
+                book.inventory += 1
+                book.save()
+                serializer = BorrowingDetailSerializer(borrowing)
+                return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class PaymentViewSet(
