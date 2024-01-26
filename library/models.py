@@ -24,11 +24,12 @@ class Borrowing(models.Model):
     expected_return_date = models.DateField()
     actual_return_date = models.DateField(null=True, blank=True)
     book = models.ForeignKey(Book, on_delete=models.CASCADE)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE
+    )
 
 
 class Payment(models.Model):
-
     class StatusChoices(models.TextChoices):
         PENDING = "PENDING", _("Pending")
         PAID = "PAID", _("Paid")
@@ -37,9 +38,11 @@ class Payment(models.Model):
         PAYMENT = "PAYMENT", _("Payment")
         FINE = "FINE", _("Fine")
 
-    status = models.CharField(max_length=10, choices=StatusChoices.choices)
+    status = models.CharField(
+        max_length=10, choices=StatusChoices.choices
+    )
     type = models.CharField(max_length=10, choices=TypeChoices.choices)
-    borrowing = models.ForeignKey(Borrowing, on_delete=models.CASCADE)
+    borrowing = models.ForeignKey(Borrowing, on_delete=models.CASCADE, related_name="payments")
     session_url = models.URLField(max_length=200)
     session_id = models.CharField(max_length=100)
     money_to_pay = models.DecimalField(max_digits=6, decimal_places=2)
