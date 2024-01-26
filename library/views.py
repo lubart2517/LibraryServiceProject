@@ -9,7 +9,8 @@ from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import viewsets, mixins, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, renderer_classes
+from rest_framework.renderers import JSONRenderer, TemplateHTMLRenderer
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from dotenv import load_dotenv
 from datetime import timedelta
@@ -56,6 +57,7 @@ def create_checkout_session(borrowing_id, payment_id):
     try:
         borrowing = Borrowing.objects.get(id=borrowing_id)
         diff = int((borrowing.expected_return_date - datetime.datetime.now().date()).days)
+        #success_url = f"{reverse("library:check_payment")}{payment_id}"
         checkout_session = stripe.checkout.Session.create(
             line_items=[
                 {
@@ -73,8 +75,7 @@ def create_checkout_session(borrowing_id, payment_id):
                 "borrowing_id": borrowing.id
             },
             mode='payment',
-            # success_url=reverse("library:payments", kwargs={'borrowing.id': borrowing.id}) + '?success=true',
-            success_url=settings.SITE_URL + '?succcess=true',
+            success_url=f"http://127.0.0.1:8000/api/library/check_payment/{payment_id}",
             cancel_url=settings.SITE_URL + '?canceled=true',
         )
         payment = Payment.objects.get(id=payment_id)
@@ -212,7 +213,7 @@ class BorrowingViewSet(
                 book = borrowing.book
                 book.inventory += 1
                 book.save()
-                serializer = BorrowingDetailSerializer(borrowing)
+                serializer = BorrowingSerializer(borrowing)
                 return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -261,39 +262,22 @@ class PaymentViewSet(
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 
 
-@csrf_exempt
-def stripe_webhook_view(request, payment_id):
-    payload = request.body
-    sig_header = request.META['HTTP_STRIPE_SIGNATURE']
-    event = None
+@api_view(('GET',))
+@renderer_classes((TemplateHTMLRenderer, JSONRenderer))
+def check_payment(request, payment_id):
+    payment = Payment.objects.get(id=payment_id)
+    borrowing_id = payment.borrowing.id
+    borrowing = Borrowing.objects.get(id=borrowing_id)
+    # sending confirmation message
+    url = (f"https://api.telegram.org/"
+           f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
+           f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
+           f"&text=Thank for your purchase your order is ready."
+           f"{borrowing.book.title}"
+           )
+    requests.get(url)
 
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.STRIPE_SECRET_WEBHOOK
-        )
-    except ValueError as e:
-        # Invalid payload
-        return Response(status=400)
-    except stripe.error.SignatureVerificationError as e:
-        # Invalid signature
-        return Response(status=400)
-
-    if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
-
-        print(session)
-        borrowing_id = session['metadata']['borrowing_id']
-        borrowing = Borrowing.objects.get(id=borrowing_id)
-        # sending confirmation message
-        url = (f"https://api.telegram.org/"
-               f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
-               f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
-               f"&text=Thank for your purchase your order is ready."
-               f"{borrowing.book.title}"
-               )
-        requests.get(url)
-        payment = Payment.objects.get(id=payment_id)
-        payment.status = "PAID"
-        payment.save()
-        # Passed signature verification
-        return Response(status=status.HTTP_200_OK)
+    payment.status = "PAID"
+    payment.save()
+    # Passed signature verification
+    return Response(status=status.HTTP_200_OK)

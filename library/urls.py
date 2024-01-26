@@ -5,6 +5,7 @@ from library.views import (
     BookViewSet,
     BorrowingViewSet,
     PaymentViewSet,
+    check_payment
 )
 
 
@@ -13,6 +14,8 @@ router.register("books", BookViewSet)
 router.register("borrowings", BorrowingViewSet)
 router.register("payments", PaymentViewSet)
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("check_payment/<int:payment_id>/", check_payment, name="check_payment"),
+]
 
 app_name = "library"
