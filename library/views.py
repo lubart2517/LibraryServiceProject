@@ -34,6 +34,8 @@ from library.permissions import (
     IsAllowedToCreateOrAdmin,
 )
 
+FINE_MULTIPLIER = 2
+
 load_dotenv()
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 
@@ -54,19 +56,29 @@ class BookViewSet(
         return super().list(request, *args, **kwargs)
 
 
-def create_checkout_session(borrowing_id, payment_id, success_url, cancel_url):
+def send_telegram_message(text):
+    url = (f"https://api.telegram.org/"
+           f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
+           f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
+           f"&text={text}"
+           )
+    requests.get(url)
+
+def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_fine):
     try:
         borrowing = Borrowing.objects.get(id=borrowing_id)
-        diff = int((borrowing.expected_return_date - datetime.datetime.now().date()).days)
-        #success_url = f"{reverse("library:check_payment")}{payment_id}"
+        if is_fine:
+            name = f"FINE for book {borrowing.book.title}"
+        else:
+            name = f"Payment for book {borrowing.book.title}"
         checkout_session = stripe.checkout.Session.create(
             line_items=[
                 {
                     'price_data': {
                         'currency': 'usd',
-                        'unit_amount': int(borrowing.book.daily_fee * 100 * diff),
+                        'unit_amount': int(money * 100),
                         'product_data': {
-                            'name': borrowing.book.title,
+                            'name': f"FINE for book {borrowing.book.title}",
                         }
                     },
                     'quantity': 1,
@@ -145,26 +157,23 @@ class BorrowingViewSet(
                 book.inventory -= 1
                 book.save()
                 borrowing = serializer.save(user=self.request.user)
-                url = (f"https://api.telegram.org/"
-                       f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
-                       f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
-                       f"&text=New borrowing of {book.title} book. Only"
-                       f"{book.inventory} of copies left"
-                       )
-                requests.get(url)
-                diff = int((borrowing.expected_return_date - datetime.datetime.now().date()).days)
+                send_telegram_message(f"New borrowing of {book.title} book. Only"
+                                      f"{book.inventory} of copies left")
+                money = int(
+                    (borrowing.expected_return_date - datetime.datetime.now().date()).days
+                ) * borrowing.book.daily_fee
                 payment = Payment.objects.create(
                     status="PENDING",
                     type="PAYMENT",
                     borrowing=borrowing,
                     session_url="",
                     session_id="",
-                    money_to_pay=borrowing.book.daily_fee * diff,
+                    money_to_pay=money,
                 )
                 payment.save()
                 success_url = reverse('library:check_payment', args=[payment.id], request=request)
                 cancel_url = reverse('library:cancel_payment', args=[payment.id], request=request)
-                return create_checkout_session(borrowing.id, payment.id, success_url, cancel_url)
+                return create_session(borrowing.id, payment.id, success_url, cancel_url, money, is_fine=False)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -203,7 +212,7 @@ class BorrowingViewSet(
         permission_classes=[IsAllowedToCreateOrAdmin],
     )
     def return_me(self, request, pk=None):
-        """Endpoint to view route flights"""
+        """Endpoint to return borrowings"""
         borrowing = self.get_object()
         if borrowing.actual_return_date:
             return Response(
@@ -216,8 +225,29 @@ class BorrowingViewSet(
                 book = borrowing.book
                 book.inventory += 1
                 book.save()
-                serializer = BorrowingSerializer(borrowing)
-                return Response(serializer.data, status=status.HTTP_200_OK)
+                send_telegram_message(f"Borrowing {borrowing.id} of {book.title} was returned."
+                                      f"There are {book.inventory} of copies now")
+                if borrowing.actual_return_date > borrowing.expected_return_date:
+                    money = int(
+                        (borrowing.actual_return_date - borrowing.expected_return_date).days
+                    ) * borrowing.book.daily_fee * FINE_MULTIPLIER
+                    payment = Payment.objects.create(
+                        status="PENDING",
+                        type="FINE",
+                        borrowing=borrowing,
+                        session_url="",
+                        session_id="",
+                        money_to_pay=money,
+                    )
+                    payment.save()
+                    success_url = reverse('library:check_fine', args=[payment.id], request=request)
+                    cancel_url = reverse('library:cancel_fine', args=[payment.id], request=request)
+                    response = create_session(borrowing.id, payment.id, success_url, cancel_url, money, True)
+                    new_data = {"payment_session_url": response}
+                    return Response(new_data, status=status.HTTP_201_CREATED)
+                else:
+                    serializer = BorrowingSerializer(borrowing)
+                    return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class PaymentViewSet(
@@ -262,43 +292,52 @@ class PaymentViewSet(
         serializer.save(user=self.request.user)
 
 
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
-
-
 @api_view(('GET',))
 def check_payment(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
     borrowing = Borrowing.objects.get(id=borrowing_id)
-    # sending confirmation message
-    url = (f"https://api.telegram.org/"
-           f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
-           f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
-           f"&text=Thank for your purchase your order is ready."
-           f"{borrowing.book.title}"
-           )
-    requests.get(url)
+    send_telegram_message(f"Payment for borrowing{borrowing_id} was paid."
+                          f"Book is {borrowing.book.title}")
 
     payment.status = "PAID"
     payment.save()
-    # Passed signature verification
-    return Response(status=status.HTTP_200_OK)
+    response_text = {"message": f"Thank for your order {borrowing.book.title}"
+                     }
+    return Response(response_text, status=status.HTTP_200_OK)
+
+
+@api_view(('GET',))
+def check_fine(request, payment_id):
+    payment = Payment.objects.get(id=payment_id)
+    send_telegram_message(f"Fine for borrowing {payment.borrowing.id} was paid")
+
+    payment.status = "PAID"
+    payment.save()
+    response_text = {"message": f"Thank for paying your fine{payment.borrowing.user.email}"
+                     }
+    return Response(response_text, status=status.HTTP_200_OK)
 
 
 @api_view(('GET',))
 def cancel_payment(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
-    url = (f"https://api.telegram.org/"
-           f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
-           f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
-           f"&text=Payment {payment_id} for borrowing {borrowing_id} was canceled"
-           f"User will be able to pay by link during 24 hours"
-           )
-    requests.get(url)
+    send_telegram_message(f"Payment {payment_id} for borrowing {borrowing_id} was canceled"
+                          f"User will be able to pay by link during 24 hours")
     response_text = {"result": "Payment was canceled",
                      "payment_url": f"{payment.session_url}"
                      }
+    return Response(response_text, status=status.HTTP_200_OK)
 
-    # Passed signature verification
+
+@api_view(('GET',))
+def cancel_fine(request, payment_id):
+    payment = Payment.objects.get(id=payment_id)
+    borrowing_id = payment.borrowing.id
+    send_telegram_message(f"Payment fine {payment_id} for borrowing {borrowing_id} was canceled"
+                          f"User will be able to pay by link during 24 hours")
+    response_text = {"result": "Fine payment was canceled",
+                     "payment_url": f"{payment.session_url}"
+                     }
     return Response(response_text, status=status.HTTP_200_OK)

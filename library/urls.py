@@ -6,7 +6,9 @@ from library.views import (
     BorrowingViewSet,
     PaymentViewSet,
     check_payment,
-    cancel_payment
+    cancel_payment,
+    check_fine,
+    cancel_fine
 )
 
 
@@ -18,6 +20,8 @@ router.register("payments", PaymentViewSet)
 urlpatterns = router.urls + [
     path("check_payment/<int:payment_id>/", check_payment, name="check_payment"),
     path("cancel_payment/<int:payment_id>/", cancel_payment, name="cancel_payment"),
+    path("check_fine/<int:payment_id>/", check_fine, name="check_fine"),
+    path("cancel_fine/<int:payment_id>/", cancel_fine, name="cancel_fine"),
 ]
 
 app_name = "library"
