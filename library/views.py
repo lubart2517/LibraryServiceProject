@@ -27,7 +27,6 @@ from library.serializers import (
     BorrowingSerializer,
     BorrowingCreateSerializer,
     PaymentSerializer,
-    CardInformationSerializer
 )
 from library.permissions import (
     IsAdminOrReadOnly,
@@ -56,6 +55,16 @@ class BookViewSet(
         return super().list(request, *args, **kwargs)
 
 
+def check_unpaid_borrowings(user_id):
+    has_unpaid_borrowings = Borrowing.objects.filter(
+        user__id=user_id,  # Filter by user ID
+        payments__status="PENDING"  # Check for borrowings with no payments
+    ).exists()
+    return has_unpaid_borrowings
+
+
+# User has no unpaid borrowings
+
 def send_telegram_message(text):
     url = (f"https://api.telegram.org/"
            f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
@@ -63,6 +72,7 @@ def send_telegram_message(text):
            f"&text={text}"
            )
     requests.get(url)
+
 
 def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_fine):
     try:
@@ -176,6 +186,10 @@ class BorrowingViewSet(
                 return create_session(borrowing.id, payment.id, success_url, cancel_url, money, is_fine=False)
 
     def create(self, request, *args, **kwargs):
+        if check_unpaid_borrowings(request.user.id):
+            response_text = {"message": f"You have pending payments"
+                             }
+            return Response(response_text, status=status.HTTP_403_FORBIDDEN)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         response = self.perform_create(serializer, request)
