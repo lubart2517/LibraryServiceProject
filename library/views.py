@@ -9,12 +9,13 @@ from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import viewsets, mixins, status
-from rest_framework.decorators import action, api_view, renderer_classes
-from rest_framework.renderers import JSONRenderer, TemplateHTMLRenderer
+from rest_framework.decorators import action, api_view
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.reverse import reverse
+from rest_framework.views import APIView
 from dotenv import load_dotenv
 from datetime import timedelta
-from rest_framework.views import APIView
+
 from rest_framework.response import Response
 from django.db.models import Subquery, OuterRef, Count, F
 from django.http import JsonResponse
@@ -53,7 +54,7 @@ class BookViewSet(
         return super().list(request, *args, **kwargs)
 
 
-def create_checkout_session(borrowing_id, payment_id):
+def create_checkout_session(borrowing_id, payment_id, success_url, cancel_url):
     try:
         borrowing = Borrowing.objects.get(id=borrowing_id)
         diff = int((borrowing.expected_return_date - datetime.datetime.now().date()).days)
@@ -75,8 +76,8 @@ def create_checkout_session(borrowing_id, payment_id):
                 "borrowing_id": borrowing.id
             },
             mode='payment',
-            success_url=f"http://127.0.0.1:8000/api/library/check_payment/{payment_id}",
-            cancel_url=settings.SITE_URL + '?canceled=true',
+            success_url=success_url,
+            cancel_url=cancel_url,
         )
         payment = Payment.objects.get(id=payment_id)
         payment.session_url = checkout_session.url,
@@ -130,7 +131,7 @@ class BorrowingViewSet(
         serializer = self.get_serializer(self.queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def perform_create(self, serializer):
+    def perform_create(self, serializer, request):
         book = Book.objects.get(id=serializer.validated_data["book"].id)
         if book.inventory == 0:
             return Response(
@@ -147,7 +148,7 @@ class BorrowingViewSet(
                 url = (f"https://api.telegram.org/"
                        f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
                        f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
-                       f"&text=new borrowing of {book.title} book. Only"
+                       f"&text=New borrowing of {book.title} book. Only"
                        f"{book.inventory} of copies left"
                        )
                 requests.get(url)
@@ -161,12 +162,14 @@ class BorrowingViewSet(
                     money_to_pay=borrowing.book.daily_fee * diff,
                 )
                 payment.save()
-                return create_checkout_session(borrowing.id, payment.id)
+                success_url = reverse('library:check_payment', args=[payment.id], request=request)
+                cancel_url = reverse('library:cancel_payment', args=[payment.id], request=request)
+                return create_checkout_session(borrowing.id, payment.id, success_url, cancel_url)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        response = self.perform_create(serializer)
+        response = self.perform_create(serializer, request)
         headers = self.get_success_headers(serializer.data)
         new_data = {"payment_session_url": response}
         new_data.update(serializer.data)
@@ -263,7 +266,6 @@ stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 
 
 @api_view(('GET',))
-@renderer_classes((TemplateHTMLRenderer, JSONRenderer))
 def check_payment(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
@@ -281,3 +283,22 @@ def check_payment(request, payment_id):
     payment.save()
     # Passed signature verification
     return Response(status=status.HTTP_200_OK)
+
+
+@api_view(('GET',))
+def cancel_payment(request, payment_id):
+    payment = Payment.objects.get(id=payment_id)
+    borrowing_id = payment.borrowing.id
+    url = (f"https://api.telegram.org/"
+           f"bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/"
+           f"sendMessage?chat_id={os.environ.get("TELEGRAM_USER_ID")}"
+           f"&text=Payment {payment_id} for borrowing {borrowing_id} was canceled"
+           f"User will be able to pay by link during 24 hours"
+           )
+    requests.get(url)
+    response_text = {"result": "Payment was canceled",
+                     "payment_url": f"{payment.session_url}"
+                     }
+
+    # Passed signature verification
+    return Response(response_text, status=status.HTTP_200_OK)
