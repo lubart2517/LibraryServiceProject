@@ -88,7 +88,7 @@ def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_
                         'currency': 'usd',
                         'unit_amount': int(money * 100),
                         'product_data': {
-                            'name': f"FINE for book {borrowing.book.title}",
+                            'name': name,
                         }
                     },
                     'quantity': 1,
@@ -102,8 +102,8 @@ def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_
             cancel_url=cancel_url,
         )
         payment = Payment.objects.get(id=payment_id)
-        payment.session_url = checkout_session.url,
-        payment.session_id = checkout_session.id,
+        payment.session_url = checkout_session.url
+        payment.session_id = checkout_session.id
         payment.save()
         return checkout_session.url
     except Exception as e:
@@ -262,6 +262,35 @@ class BorrowingViewSet(
                 else:
                     serializer = BorrowingSerializer(borrowing)
                     return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        methods=["GET"],
+        detail=True,
+        url_path="renew_session",
+        permission_classes=[IsAllowedToCreateOrAdmin],
+    )
+    def renew_session(self, request, pk=None):
+        """Endpoint to renew borrowing payment session"""
+        borrowing = self.get_object()
+        payment = borrowing.payments.filter(status="EXPIRED").first()
+        is_fine = payment.type == "FINE"
+        if is_fine:
+            success_url = reverse('library:check_fine', args=[payment.id], request=request)
+            cancel_url = reverse('library:cancel_fine', args=[payment.id], request=request)
+        else:
+            success_url = reverse('library:check_payment', args=[payment.id], request=request)
+            cancel_url = reverse('library:cancel_payment', args=[payment.id], request=request)
+        money = payment.money_to_pay
+
+        return Response(create_session(
+            borrowing_id=borrowing.id,
+            payment_id=payment.id,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            money=money,
+            is_fine=is_fine
+
+        ))
 
 
 class PaymentViewSet(
