@@ -27,10 +27,7 @@ def check_payment_method(value):
 
 
 class CardInformationSerializer(serializers.Serializer):
-    card_number = serializers.CharField(
-        max_length=150,
-        required=True
-    )
+    card_number = serializers.CharField(max_length=150, required=True)
     expiry_month = serializers.CharField(
         max_length=150,
         required=True,
@@ -68,7 +65,6 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class BorrowingCreateSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = Borrowing
         fields = (
@@ -76,18 +72,6 @@ class BorrowingCreateSerializer(serializers.ModelSerializer):
             "expected_return_date",
             "actual_return_date",
             "book",
-        )
-
-
-class BorrowingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Borrowing
-        fields = (
-            "borrow_date",
-            "expected_return_date",
-            "actual_return_date",
-            "book",
-            "user",
         )
 
 
@@ -103,8 +87,5 @@ class BorrowingSerializer(serializers.ModelSerializer):
             "actual_return_date",
             "book",
             "user",
-            "payments"
+            "payments",
         )
-
-
-

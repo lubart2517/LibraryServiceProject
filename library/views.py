@@ -2,24 +2,15 @@ import os
 import datetime
 import requests
 import stripe
+
 from django.db import transaction
-from django.conf import settings
-from django.shortcuts import redirect, reverse
-from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import viewsets, mixins, status
 from rest_framework.decorators import action, api_view
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.reverse import reverse
-from rest_framework.views import APIView
-from dotenv import load_dotenv
-from datetime import timedelta
-
 from rest_framework.response import Response
-from django.db.models import Subquery, OuterRef, Count, F
-from django.http import JsonResponse
-from django.core.serializers import serialize
+from dotenv import load_dotenv
 
 from library.models import Book, Borrowing, Payment
 from library.serializers import (
@@ -31,6 +22,7 @@ from library.serializers import (
 from library.permissions import (
     IsAdminOrReadOnly,
     IsAllowedToCreateOrAdmin,
+    IsAllowedToViewOwnOrAdmin
 )
 
 FINE_MULTIPLIER = 2
@@ -51,19 +43,14 @@ class BookViewSet(
     serializer_class = BookSerializer
     permission_classes = (IsAdminOrReadOnly,)
 
-    def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
-
 
 def check_unpaid_borrowings(user_id):
     has_unpaid_borrowings = Borrowing.objects.filter(
-        user__id=user_id,  # Filter by user ID
-        payments__status="PENDING"  # Check for borrowings with no payments
+        user__id=user_id,
+        payments__status__in=["PENDING", "EXPIRED"]
     ).exists()
     return has_unpaid_borrowings
 
-
-# User has no unpaid borrowings
 
 def send_telegram_message(text):
     url = (f"https://api.telegram.org/"
@@ -74,7 +61,14 @@ def send_telegram_message(text):
     requests.get(url)
 
 
-def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_fine):
+def create_session(
+        borrowing_id,
+        payment_id,
+        success_url,
+        cancel_url,
+        money,
+        is_fine
+):
     try:
         borrowing = Borrowing.objects.get(id=borrowing_id)
         if is_fine:
@@ -84,20 +78,20 @@ def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_
         checkout_session = stripe.checkout.Session.create(
             line_items=[
                 {
-                    'price_data': {
-                        'currency': 'usd',
-                        'unit_amount': int(money * 100),
-                        'product_data': {
-                            'name': name,
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": int(money * 100),
+                        "product_data": {
+                            "name": name,
                         }
                     },
-                    'quantity': 1,
+                    "quantity": 1,
                 },
             ],
             metadata={
                 "borrowing_id": borrowing.id
             },
-            mode='payment',
+            mode="payment",
             success_url=success_url,
             cancel_url=cancel_url,
         )
@@ -107,7 +101,9 @@ def create_session(borrowing_id, payment_id, success_url, cancel_url, money, is_
         payment.save()
         return checkout_session.url
     except Exception as e:
-        return Response({'msg': 'something went wrong while creating stripe session', 'error': str(e)}, status=500)
+        return Response(
+            {"msg": "something went wrong while creating stripe session",
+             "error": str(e)}, status=500)
 
 
 class BorrowingViewSet(
@@ -118,7 +114,9 @@ class BorrowingViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Borrowing.objects
+    queryset = Borrowing.objects.select_related(
+        "book"
+    ).prefetch_related("payments")
     serializer_class = BorrowingSerializer
     permission_classes = (IsAllowedToCreateOrAdmin,)
 
@@ -146,7 +144,6 @@ class BorrowingViewSet(
         ]
     )
     def list(self, request, *args, **kwargs):
-        self.queryset = Borrowing.objects
         if not request.user.is_staff:
             self.queryset = self.queryset.filter(user=request.user)
 
@@ -158,7 +155,8 @@ class BorrowingViewSet(
         if book.inventory == 0:
             return Response(
                 {
-                    f"There are no more inventories of the book {book.title} in the library"
+                    f"There are no more inventories of the book "
+                    f"{book.title} in the library"
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -167,10 +165,14 @@ class BorrowingViewSet(
                 book.inventory -= 1
                 book.save()
                 borrowing = serializer.save(user=self.request.user)
-                send_telegram_message(f"New borrowing of {book.title} book. Only"
-                                      f"{book.inventory} of copies left")
+                send_telegram_message(
+                    f"New borrowing of {book.title} book. "
+                    f"Only {book.inventory} of copies left")
                 money = int(
-                    (borrowing.expected_return_date - datetime.datetime.now().date()).days
+                    (
+                        borrowing.expected_return_date
+                        - datetime.datetime.now().date()
+                    ).days
                 ) * borrowing.book.daily_fee
                 payment = Payment.objects.create(
                     status="PENDING",
@@ -181,13 +183,28 @@ class BorrowingViewSet(
                     money_to_pay=money,
                 )
                 payment.save()
-                success_url = reverse('library:check_payment', args=[payment.id], request=request)
-                cancel_url = reverse('library:cancel_payment', args=[payment.id], request=request)
-                return create_session(borrowing.id, payment.id, success_url, cancel_url, money, is_fine=False)
+                success_url = reverse(
+                    "library:check_payment",
+                    args=[payment.id],
+                    request=request
+                )
+                cancel_url = reverse(
+                    "library:cancel_payment",
+                    args=[payment.id],
+                    request=request
+                )
+                return create_session(
+                    borrowing.id,
+                    payment.id,
+                    success_url,
+                    cancel_url,
+                    money,
+                    is_fine=False
+                )
 
     def create(self, request, *args, **kwargs):
         if check_unpaid_borrowings(request.user.id):
-            response_text = {"message": f"You have pending payments"
+            response_text = {"message": "You have pending or expired payments"
                              }
             return Response(response_text, status=status.HTTP_403_FORBIDDEN)
         serializer = self.get_serializer(data=request.data)
@@ -196,7 +213,11 @@ class BorrowingViewSet(
         headers = self.get_success_headers(serializer.data)
         new_data = {"payment_session_url": response}
         new_data.update(serializer.data)
-        return Response(new_data, status=status.HTTP_201_CREATED, headers=headers)
+        return Response(
+            new_data,
+            status=status.HTTP_201_CREATED,
+            headers=headers
+        )
 
     def get_queryset(self):
         """Retrieve the borrowing with filters"""
@@ -239,11 +260,18 @@ class BorrowingViewSet(
                 book = borrowing.book
                 book.inventory += 1
                 book.save()
-                send_telegram_message(f"Borrowing {borrowing.id} of {book.title} was returned."
-                                      f"There are {book.inventory} of copies now")
-                if borrowing.actual_return_date > borrowing.expected_return_date:
+                send_telegram_message(
+                    f"Borrowing {borrowing.id} of {book.title} was returned."
+                    f"There are {book.inventory} of copies now")
+                if (
+                        borrowing.actual_return_date
+                        > borrowing.expected_return_date
+                ):
                     money = int(
-                        (borrowing.actual_return_date - borrowing.expected_return_date).days
+                        (
+                            borrowing.actual_return_date
+                            - borrowing.expected_return_date
+                        ).days
                     ) * borrowing.book.daily_fee * FINE_MULTIPLIER
                     payment = Payment.objects.create(
                         status="PENDING",
@@ -254,9 +282,25 @@ class BorrowingViewSet(
                         money_to_pay=money,
                     )
                     payment.save()
-                    success_url = reverse('library:check_fine', args=[payment.id], request=request)
-                    cancel_url = reverse('library:cancel_fine', args=[payment.id], request=request)
-                    response = create_session(borrowing.id, payment.id, success_url, cancel_url, money, True)
+                    success_url = reverse(
+                        "library:check_fine",
+                        args=[payment.id],
+                        request=request
+                    )
+                    cancel_url = reverse(
+                        "library:cancel_fine",
+                        args=[payment.id],
+                        request=request
+                    )
+                    is_fine = True
+                    response = create_session(
+                        borrowing.id,
+                        payment.id,
+                        success_url,
+                        cancel_url,
+                        money,
+                        is_fine
+                    )
                     new_data = {"payment_session_url": response}
                     return Response(new_data, status=status.HTTP_201_CREATED)
                 else:
@@ -275,11 +319,27 @@ class BorrowingViewSet(
         payment = borrowing.payments.filter(status="EXPIRED").first()
         is_fine = payment.type == "FINE"
         if is_fine:
-            success_url = reverse('library:check_fine', args=[payment.id], request=request)
-            cancel_url = reverse('library:cancel_fine', args=[payment.id], request=request)
+            success_url = reverse(
+                "library:check_fine",
+                args=[payment.id],
+                request=request
+            )
+            cancel_url = reverse(
+                "library:cancel_fine",
+                args=[payment.id],
+                request=request
+            )
         else:
-            success_url = reverse('library:check_payment', args=[payment.id], request=request)
-            cancel_url = reverse('library:cancel_payment', args=[payment.id], request=request)
+            success_url = reverse(
+                "library:check_payment",
+                args=[payment.id],
+                request=request
+            )
+            cancel_url = reverse(
+                "library:cancel_payment",
+                args=[payment.id],
+                request=request
+            )
         money = payment.money_to_pay
 
         return Response(create_session(
@@ -303,7 +363,7 @@ class PaymentViewSet(
 ):
     queryset = Payment.objects
     serializer_class = PaymentSerializer
-    permission_classes = (IsAllowedToCreateOrAdmin,)
+    permission_classes = (IsAllowedToViewOwnOrAdmin,)
 
     def get_queryset(self):
         """Retrieve the payments with filters"""
@@ -335,7 +395,7 @@ class PaymentViewSet(
         serializer.save(user=self.request.user)
 
 
-@api_view(('GET',))
+@api_view(("GET",))
 def check_payment(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
@@ -350,36 +410,42 @@ def check_payment(request, payment_id):
     return Response(response_text, status=status.HTTP_200_OK)
 
 
-@api_view(('GET',))
+@api_view(("GET",))
 def check_fine(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     send_telegram_message(f"Fine for borrowing {payment.borrowing.id} was paid")
 
     payment.status = "PAID"
     payment.save()
-    response_text = {"message": f"Thank for paying your fine{payment.borrowing.user.email}"
-                     }
+    response_text = {
+        "message": f"Thank for paying your fine"
+        f"{payment.borrowing.user.email}"
+    }
     return Response(response_text, status=status.HTTP_200_OK)
 
 
-@api_view(('GET',))
+@api_view(("GET",))
 def cancel_payment(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
-    send_telegram_message(f"Payment {payment_id} for borrowing {borrowing_id} was canceled"
-                          f"User will be able to pay by link during 24 hours")
+    send_telegram_message(f"Payment {payment_id} for borrowing"
+                          f" {borrowing_id} was canceled"
+                          f"User will be able to pay by "
+                          f"link during 24 hours")
     response_text = {"result": "Payment was canceled",
                      "payment_url": f"{payment.session_url}"
                      }
     return Response(response_text, status=status.HTTP_200_OK)
 
 
-@api_view(('GET',))
+@api_view(("GET",))
 def cancel_fine(request, payment_id):
     payment = Payment.objects.get(id=payment_id)
     borrowing_id = payment.borrowing.id
-    send_telegram_message(f"Payment fine {payment_id} for borrowing {borrowing_id} was canceled"
-                          f"User will be able to pay by link during 24 hours")
+    send_telegram_message(f"Payment fine {payment_id} for borrowing "
+                          f"{borrowing_id} was canceled"
+                          f"User will be able to pay by "
+                          f"link during 24 hours")
     response_text = {"result": "Fine payment was canceled",
                      "payment_url": f"{payment.session_url}"
                      }

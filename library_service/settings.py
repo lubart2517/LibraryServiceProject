@@ -32,9 +32,6 @@ if not SECRET_KEY:
     SECRET_KEY = "".join(
         random.choice(string.ascii_lowercase) for i in range(32)
     )
-SECRET_KEY = (
-    "django-insecure-w4$bql9*vj(&^fm+lx(nsbd1yu8f2u&q-x083*g1(en!x!73yp"
-)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -45,6 +42,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    "drf_test_generator",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -107,16 +105,22 @@ DATABASES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+        "NAME": (
+            "django.contrib.auth."
+            "password_validation.UserAttributeSimilarityValidator"
+        ),
     },
     {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "NAME": "django.contrib.auth.pass"
+        "word_validation.MinimumLengthValidator",
     },
     {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+        "NAME": "django.contrib.auth."
+        "password_validation.CommonPasswordValidator",
     },
     {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+        "NAME": "django.contrib.auth."
+        "password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -158,8 +162,8 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Airport Service API",
-    "DESCRIPTION": "Order tickets, plane flights",
+    "TITLE": "Library Service API",
+    "DESCRIPTION": "Borrow books, pay for borrowings",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "SWAGGER_UI_SETTINGS": {
